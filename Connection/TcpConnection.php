@@ -165,11 +165,18 @@ class TcpConnection extends ConnectionInterface
     public static $defaultMaxSendBufferSize = 1048576;
 
     /**
-     * Maximum acceptable packet size.
+     * Sets the maximum acceptable packet size for the current connection.
      *
      * @var int
      */
-    public static $maxPackageSize = 10485760;
+    public $maxPackageSize = 1048576;
+    
+    /**
+     * Default maximum acceptable packet size.
+     *
+     * @var int
+     */
+    public static $defaultMaxPackageSize = 10485760;
 
     /**
      * Id recorder.
@@ -298,6 +305,7 @@ class TcpConnection extends ConnectionInterface
         }
         Worker::$globalEvent->add($this->_socket, EventInterface::EV_READ, array($this, 'baseRead'));
         $this->maxSendBufferSize        = self::$defaultMaxSendBufferSize;
+        $this->maxPackageSize           = self::$defaultMaxPackageSize;
         $this->_remoteAddress           = $remote_address;
         static::$connections[$this->id] = $this;
     }
@@ -322,7 +330,7 @@ class TcpConnection extends ConnectionInterface
      *
      * @param string $send_buffer
      * @param bool  $raw
-     * @return void|bool|null
+     * @return bool|null
      */
     public function send($send_buffer, $raw = false)
     {
@@ -353,11 +361,16 @@ class TcpConnection extends ConnectionInterface
             return null;
         }
 
-
         // Attempt to send data directly.
         if ($this->_sendBuffer === '') {
+            if ($this->transport === 'ssl') {
+                Worker::$globalEvent->add($this->_socket, EventInterface::EV_WRITE, array($this, 'baseWrite'));
+                $this->_sendBuffer = $send_buffer;
+                $this->checkBufferWillFull();
+                return null;
+            }
             set_error_handler(function(){});
-            $len = fwrite($this->_socket, $send_buffer, 8192);
+            $len = fwrite($this->_socket, $send_buffer);
             restore_error_handler();
             // send successful.
             if ($len === strlen($send_buffer)) {
@@ -603,21 +616,21 @@ class TcpConnection extends ConnectionInterface
                 } else {
                     // Get current package length.
                     set_error_handler(function($code, $msg, $file, $line){
-                        echo "$msg in file $file on line $line\n";
+                        Worker::safeEcho("$msg in file $file on line $line\n");
                     });
                     $this->_currentPackageLength = $parser::input($this->_recvBuffer, $this);
                     restore_error_handler();
                     // The packet length is unknown.
                     if ($this->_currentPackageLength === 0) {
                         break;
-                    } elseif ($this->_currentPackageLength > 0 && $this->_currentPackageLength <= self::$maxPackageSize) {
+                    } elseif ($this->_currentPackageLength > 0 && $this->_currentPackageLength <= $this->maxPackageSize) {
                         // Data is not enough for a package.
                         if ($this->_currentPackageLength > strlen($this->_recvBuffer)) {
                             break;
                         }
                     } // Wrong package.
                     else {
-                        echo 'error package. package_length=' . var_export($this->_currentPackageLength, true);
+                        Worker::safeEcho('error package. package_length=' . var_export($this->_currentPackageLength, true));
                         $this->destroy();
                         return;
                     }
@@ -685,7 +698,11 @@ class TcpConnection extends ConnectionInterface
     public function baseWrite()
     {
         set_error_handler(function(){});
-        $len = fwrite($this->_socket, $this->_sendBuffer, 8192);
+        if ($this->transport === 'ssl') {
+            $len = fwrite($this->_socket, $this->_sendBuffer, 8192);
+        } else {
+            $len = fwrite($this->_socket, $this->_sendBuffer);
+        }
         restore_error_handler();
         if ($len === strlen($this->_sendBuffer)) {
             $this->bytesWritten += $len;
@@ -738,7 +755,7 @@ class TcpConnection extends ConnectionInterface
         // Hidden error.
         set_error_handler(function($errno, $errstr, $file){
             if (!Worker::$daemonize) {
-                echo 'SSL handshake error: ',$errstr, "\n";
+                Worker::safeEcho("SSL handshake error: $errstr \n");
             }
         });
         $ret     = stream_socket_enable_crypto($socket, true, $type);

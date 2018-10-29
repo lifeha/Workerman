@@ -92,7 +92,7 @@ class WebServer extends Worker
     public function onWorkerStart()
     {
         if (empty($this->serverRoot)) {
-            echo new \Exception('server root not set, please use WebServer::addRoot($domain, $root_path) to set server root path');
+            Worker::safeEcho(new \Exception('server root not set, please use WebServer::addRoot($domain, $root_path) to set server root path'));
             exit(250);
         }
 
@@ -151,7 +151,7 @@ class WebServer extends Worker
     public function onMessage($connection)
     {
         // REQUEST_URI.
-        $workerman_url_info = parse_url($_SERVER['REQUEST_URI']);
+        $workerman_url_info = parse_url('http://'.$_SERVER['HTTP_HOST'].$_SERVER['REQUEST_URI']);
         if (!$workerman_url_info) {
             Http::header('HTTP/1.1 400 Bad Request');
             $connection->close('<h1>400 Bad Request</h1>');
@@ -209,7 +209,7 @@ class WebServer extends Worker
                 } catch (\Exception $e) {
                     // Jump_exit?
                     if ($e->getMessage() != 'jump_exit') {
-                        echo $e;
+                        Worker::safeEcho($e);
                     }
                 }
                 $content = ob_get_clean();
